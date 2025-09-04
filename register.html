@@ -69,11 +69,27 @@
                         type="password" 
                         id="password" 
                         class="form-control" 
-                        placeholder="Create a password (min 6 characters)"
+                        placeholder="Create a strong password"
                         required
                         autocomplete="new-password"
-                        minlength="6"
                     >
+                    <div id="password-requirements" class="password-requirements">
+                        <div class="requirement" id="req-length">
+                            <i class="fas fa-times"></i> At least 8 characters
+                        </div>
+                        <div class="requirement" id="req-lowercase">
+                            <i class="fas fa-times"></i> At least one lowercase letter
+                        </div>
+                        <div class="requirement" id="req-uppercase">
+                            <i class="fas fa-times"></i> At least one uppercase letter
+                        </div>
+                        <div class="requirement" id="req-digit">
+                            <i class="fas fa-times"></i> At least one digit
+                        </div>
+                        <div class="requirement" id="req-special">
+                            <i class="fas fa-times"></i> At least one special character (@$!%*?&)
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="form-group">
@@ -183,8 +199,10 @@
                 hasErrors = true;
             }
             
-            if (!password || password.length < 6) {
-                showError('password', 'Password must be at least 6 characters long');
+            // Validate password with strong requirements
+            const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+            if (!password || !passwordRegex.test(password)) {
+                showError('password', 'Password must meet all security requirements');
                 hasErrors = true;
             }
             
@@ -232,23 +250,61 @@
             });
         });
         
-        // Password strength indicator
+        // Password validation with real-time feedback
+        function validatePassword(password) {
+            const requirements = {
+                length: password.length >= 8,
+                lowercase: /[a-z]/.test(password),
+                uppercase: /[A-Z]/.test(password),
+                digit: /\d/.test(password),
+                special: /[@$!%*?&]/.test(password)
+            };
+            
+            // Update UI for each requirement
+            updateRequirement('req-length', requirements.length, 'At least 8 characters');
+            updateRequirement('req-lowercase', requirements.lowercase, 'At least one lowercase letter');
+            updateRequirement('req-uppercase', requirements.uppercase, 'At least one uppercase letter');
+            updateRequirement('req-digit', requirements.digit, 'At least one digit');
+            updateRequirement('req-special', requirements.special, 'At least one special character (@$!%*?&)');
+            
+            // Check if all requirements are met
+            const allValid = Object.values(requirements).every(req => req);
+            
+            // Update password field styling
+            const passwordField = document.getElementById('password');
+            if (password.length === 0) {
+                passwordField.style.borderColor = "#e1e5e9";
+                passwordField.style.backgroundColor = "#f8f9fa";
+            } else if (allValid) {
+                passwordField.style.borderColor = "#28a745";
+                passwordField.style.backgroundColor = "#d4edda";
+            } else {
+                passwordField.style.borderColor = "#ffc107";
+                passwordField.style.backgroundColor = "#fff3cd";
+            }
+            
+            return allValid;
+        }
+        
+        function updateRequirement(elementId, isValid, text) {
+            const element = document.getElementById(elementId);
+            const icon = element.querySelector('i');
+            
+            if (isValid) {
+                element.classList.add('valid');
+                icon.className = 'fas fa-check';
+                element.innerHTML = `<i class="fas fa-check"></i> ${text} ✓`;
+            } else {
+                element.classList.remove('valid');
+                icon.className = 'fas fa-times';
+                element.innerHTML = `<i class="fas fa-times"></i> ${text}`;
+            }
+        }
+        
+        // Real-time password validation
         document.getElementById("password").addEventListener("input", function() {
             const password = this.value;
-            const minLength = password.length >= 6;
-            
-            if (password && !minLength) {
-                this.style.borderColor = "#dc3545";
-                this.style.backgroundColor = "#fff5f5";
-                this.style.borderColor = "#c33";
-                this.style.backgroundColor = "#fee";
-            } else if (password && minLength) {
-                this.style.borderColor = "#3c763d";
-                this.style.backgroundColor = "#efe";
-            } else {
-                this.style.borderColor = "#e1e5e9";
-                this.style.backgroundColor = "#f8f9fa";
-            }
+            validatePassword(password);
         });
     </script>
 </body>

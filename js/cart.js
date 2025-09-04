@@ -36,6 +36,17 @@ function loadUserCart() {
             }
         }
         
+        // Get purchased items and mark them as purchased in the cart
+        const purchasedItems = getPurchasedItems();
+        if (purchasedItems.length > 0) {
+            storedCart.forEach(cartItem => {
+                const purchasedItem = purchasedItems.find(p => p.id === cartItem.id);
+                if (purchasedItem) {
+                    cartItem.purchased = true;
+                }
+            });
+        }
+        
         sessionStorage.setItem("cart", JSON.stringify(storedCart));
     } catch (error) {
         console.error("Error loading user cart:", error);
@@ -56,6 +67,39 @@ function getCart() {
         console.error("Error parsing cart data:", error);
         sessionStorage.removeItem("cart");
         return [];
+    }
+}
+
+// Get purchased items from localStorage
+function getPurchasedItems() {
+    const currentUser = getCurrentUser();
+    if (!currentUser) return [];
+    
+    try {
+        const purchasedKey = `purchased_${currentUser.id}`;
+        const purchasedData = localStorage.getItem(purchasedKey);
+        if (!purchasedData || purchasedData === "null" || purchasedData === "undefined") {
+            return [];
+        }
+        const parsedPurchased = JSON.parse(purchasedData);
+        return Array.isArray(parsedPurchased) ? parsedPurchased : [];
+    } catch (error) {
+        console.error("Error parsing purchased data:", error);
+        return [];
+    }
+}
+
+// Save purchased items to localStorage
+function savePurchasedItems(purchasedData) {
+    const currentUser = getCurrentUser();
+    if (!currentUser) return;
+    
+    try {
+        const validPurchasedData = Array.isArray(purchasedData) ? purchasedData : [];
+        const purchasedKey = `purchased_${currentUser.id}`;
+        localStorage.setItem(purchasedKey, JSON.stringify(validPurchasedData));
+    } catch (error) {
+        console.error("Error saving purchased items:", error);
     }
 }
 
@@ -104,7 +148,8 @@ function addToCart(product, quantity) {
             title: product.title,
             price: product.price,
             image: product.image,
-            quantity: quantity
+            quantity: quantity,
+            purchased: false
         });
     }
 
@@ -121,7 +166,17 @@ function removeFromCart(productId) {
     const currentUser = getCurrentUser();
     if (!currentUser) return;
     
-    let cart = getCart().filter(item => item.id !== productId);
+    let cart = getCart();
+    const itemToRemove = cart.find(item => item.id === productId);
+    
+    // If item was purchased, remove it from purchased list and recalculate total
+    if (itemToRemove && itemToRemove.purchased) {
+        let purchasedItems = getPurchasedItems();
+        purchasedItems = purchasedItems.filter(item => item.id !== productId);
+        savePurchasedItems(purchasedItems);
+    }
+    
+    cart = cart.filter(item => item.id !== productId);
     saveCart(cart);
     updateCartCount();
     renderCart();
@@ -230,10 +285,13 @@ function renderCart() {
         const div = document.createElement("div");
         div.classList.add("cart-item");
         
+        const isPurchased = item.purchased || false;
+        const purchasedStatus = isPurchased ? ' (Purchased)' : '';
+        
         div.innerHTML = `
             <img src="${item.image}" alt="${item.title}" width="100">
             <div class="titleincart">
-                <h5>${item.title}</h5>
+                <h5>${item.title}${purchasedStatus}</h5>
             </div>
             <p>Price: <span class="price">$${item.price}</span></p>
             <div class="actions" id="actions-${item.id}">
@@ -247,15 +305,22 @@ function renderCart() {
                     </button>
                 </div>
                 <div class="flex">
-                    <button class="buy" id="buy-${item.id}" onclick="buyItem(${item.id})">Buy Now</button>
-                    <button class="delete" onclick="confirmRemoveItem(${item.id}, '${item.title.replace(/'/g, "\\'")}')">Delete</button>
+                    <button class="buy" id="buy-${item.id}" onclick="buyItem(${item.id})">${isPurchased ? 'Purchased' : 'Buy Now'}</button>
+                    <button class="delete" onclick="confirmRemoveItem(${item.id}, '${item.title.replace(/'/g, "\'")}')">Delete</button>
                 </div>
             </div>
             <p>Subtotal: <span class="subtotal">$${(item.price * item.quantity).toFixed(2)}</span></p>
         `;
         
         cartContainer.appendChild(div);
+        
+        // Always add to total, regardless of purchase status
         total += item.price * item.quantity;
+        
+        // Apply disabled state if purchased
+        if (isPurchased) {
+            setTimeout(() => disableProductButtons(item.id), 0);
+        }
     });
 
     if (totalElement) {
@@ -284,7 +349,10 @@ function confirmRemoveItem(productId, productTitle) {
     }
 }
 
-// Buy item functionality
+// Global variable to store the current item being purchased
+let currentPurchaseItem = null;
+
+// Buy item functionality - now shows address popup first
 function buyItem(productId) {
     const currentUser = getCurrentUser();
     if (!currentUser) {
@@ -292,7 +360,7 @@ function buyItem(productId) {
         return;
     }
     
-    const cart = getCart();
+    let cart = getCart();
     if (!cart) {
         showNotification("Cart is not available", "error");
         return;
@@ -301,18 +369,100 @@ function buyItem(productId) {
     const item = cart.find(item => item.id === productId);
     
     if (item) {
-        // Disable only this product's buttons (except delete)
-        disableProductButtons(productId);
+        // Check if already purchased
+        if (item.purchased) {
+            showNotification("Item already purchased!", "info");
+            return;
+        }
         
-        // Simulate purchase
+        // Store the item for purchase after address is provided
+        currentPurchaseItem = item;
+        
+        // Show address popup
+        showAddressPopup();
+    } else {
+        showNotification("Item not found in cart", "error");
+    }
+}
+
+// Show address popup
+function showAddressPopup() {
+    const popup = document.getElementById('address-popup');
+    if (popup) {
+        // Load saved address if available
+        loadSavedAddress();
+        popup.style.display = 'flex';
+        document.body.style.overflow = 'hidden'; // Prevent background scrolling
+    }
+}
+
+// Close address popup
+function closeAddressPopup() {
+    const popup = document.getElementById('address-popup');
+    if (popup) {
+        popup.style.display = 'none';
+        document.body.style.overflow = 'auto'; // Restore scrolling
+        currentPurchaseItem = null; // Clear the current purchase item
+        currentBulkPurchaseItems = null; // Clear bulk purchase items
+    }
+}
+
+// Complete the purchase after address is provided
+function completePurchase(addressData) {
+    if (!currentPurchaseItem) {
+        showNotification("No item selected for purchase", "error");
+        return;
+    }
+    
+    let cart = getCart();
+    const item = cart.find(item => item.id === currentPurchaseItem.id);
+    
+    if (item) {
+        // Mark item as purchased in cart
+        item.purchased = true;
+        saveCart(cart);
+        
+        // Add to purchased items list with address
+        let purchasedItems = getPurchasedItems();
+        const existingPurchased = purchasedItems.find(p => p.id === item.id);
+        if (!existingPurchased) {
+            purchasedItems.push({
+                id: item.id,
+                title: item.title,
+                price: item.price,
+                quantity: item.quantity,
+                purchaseDate: new Date().toISOString(),
+                shippingAddress: addressData
+            });
+            savePurchasedItems(purchasedItems);
+        }
+        
+        // Save address for future use
+        saveUserAddress(addressData);
+        
+        // Disable only this product's buttons (except delete)
+        disableProductButtons(item.id);
+        
+        // Update the buy button text
+        const buyBtn = document.getElementById(`buy-${item.id}`);
+        if (buyBtn) {
+            buyBtn.textContent = 'Purchased';
+        }
+        
+        // Close popup
+        closeAddressPopup();
+        
+        // Show success message
         swal({
             title: "Purchase Successful!",
-            text: `Thank you for purchasing ${item.title}! المنتج جاي في الطريق.`,
+            text: `Thank you for purchasing ${item.title}! Your order will be shipped to ${addressData.city}, ${addressData.country}. المنتج جاي في الطريق.`,
             icon: "success",
-            timer: 2000,
+            timer: 3000,
             buttons: false
         });
-        // Do not remove item from cart after purchase
+        
+        // Re-render to update UI
+        renderCart();
     } else {
         showNotification("Item not found in cart", "error");
     }
@@ -333,7 +483,10 @@ function disableProductButtons(productId) {
     });
 }
 
-// Buy all items functionality
+// Global variable to store items for bulk purchase
+let currentBulkPurchaseItems = null;
+
+// Buy all items functionality - now shows address popup first
 function buyAllItems() {
     const currentUser = getCurrentUser();
     if (!currentUser) {
@@ -341,33 +494,95 @@ function buyAllItems() {
         return;
     }
     
-    const cart = getCart();
+    let cart = getCart();
     if (!cart || cart.length === 0) {
         showNotification("Your cart is empty", "warning");
         return;
     }
     
-    const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    // Filter unpurchased items
+    const unpurchasedItems = cart.filter(item => !item.purchased);
+    if (unpurchasedItems.length === 0) {
+        showNotification("All items are already purchased!", "info");
+        return;
+    }
+    
+    const totalAmount = unpurchasedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     
     swal({
-        title: "Buy All Items?",
-        text: `Total amount: $${totalAmount.toFixed(2)}`,
+        title: "Buy All Remaining Items?",
+        text: `Total amount: $${totalAmount.toFixed(2)} for ${unpurchasedItems.length} items. You'll need to provide shipping address.`,
         icon: "info",
-        buttons: ["Cancel", "Buy All"]
+        buttons: ["Cancel", "Continue"]
     }).then(confirmed => {
         if (confirmed) {
-            // Disable all product buttons except delete
-            cart.forEach(item => disableProductButtons(item.id));
-            
-            swal({
-                title: "Purchase Successful!",
-                text: `Thank you for purchasing all items! Total: $${totalAmount.toFixed(2)}. جميع المنتجات جاية في الطريق.`,
-                icon: "success",
-                timer: 3000,
-                buttons: false
-            });
+            // Store items for bulk purchase
+            currentBulkPurchaseItems = unpurchasedItems;
+            // Show address popup for bulk purchase
+            showAddressPopup();
         }
     });
+}
+
+// Complete bulk purchase after address is provided
+function completeBulkPurchase(addressData) {
+    if (!currentBulkPurchaseItems || currentBulkPurchaseItems.length === 0) {
+        showNotification("No items selected for bulk purchase", "error");
+        return;
+    }
+    
+    let cart = getCart();
+    let purchasedItems = getPurchasedItems();
+    const totalAmount = currentBulkPurchaseItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    // Mark all unpurchased items as purchased
+    currentBulkPurchaseItems.forEach(item => {
+        // Find item in cart and mark as purchased
+        const cartItem = cart.find(c => c.id === item.id);
+        if (cartItem) {
+            cartItem.purchased = true;
+        }
+        
+        // Add to purchased items list if not already there
+        const existingPurchased = purchasedItems.find(p => p.id === item.id);
+        if (!existingPurchased) {
+            purchasedItems.push({
+                id: item.id,
+                title: item.title,
+                price: item.price,
+                quantity: item.quantity,
+                purchaseDate: new Date().toISOString(),
+                shippingAddress: addressData
+            });
+        }
+        
+        // Disable buttons
+        disableProductButtons(item.id);
+    });
+    
+    // Save updated data
+    saveCart(cart);
+    savePurchasedItems(purchasedItems);
+    
+    // Save address for future use
+    saveUserAddress(addressData);
+    
+    // Close popup
+    closeAddressPopup();
+    
+    // Clear bulk purchase items
+    currentBulkPurchaseItems = null;
+    
+    swal({
+        title: "Purchase Successful!",
+        text: `Thank you for purchasing all items! Total: $${totalAmount.toFixed(2)}. Your orders will be shipped to ${addressData.city}, ${addressData.country}. جميع المنتجات جاية في الطريق.`,
+        icon: "success",
+        timer: 4000,
+        buttons: false
+    });
+    
+    // Re-render to update UI
+    renderCart();
 }
 
 // Delete all items functionality
@@ -438,6 +653,95 @@ window.addEventListener("cartUpdated", (e) => {
     }
 });
 
+// Save user address to localStorage
+function saveUserAddress(addressData) {
+    const currentUser = getCurrentUser();
+    if (!currentUser) return;
+    
+    try {
+        const addressKey = `address_${currentUser.id}`;
+        localStorage.setItem(addressKey, JSON.stringify(addressData));
+    } catch (error) {
+        console.error("Error saving address:", error);
+    }
+}
+
+// Get saved user address from localStorage
+function getSavedAddress() {
+    const currentUser = getCurrentUser();
+    if (!currentUser) return null;
+    
+    try {
+        const addressKey = `address_${currentUser.id}`;
+        const savedAddress = localStorage.getItem(addressKey);
+        return savedAddress ? JSON.parse(savedAddress) : null;
+    } catch (error) {
+        console.error("Error loading saved address:", error);
+        return null;
+    }
+}
+
+// Load saved address into form
+function loadSavedAddress() {
+    const savedAddress = getSavedAddress();
+    if (savedAddress) {
+        document.getElementById('fullName').value = savedAddress.fullName || '';
+        document.getElementById('phone').value = savedAddress.phone || '';
+        document.getElementById('city').value = savedAddress.city || '';
+        document.getElementById('state').value = savedAddress.state || '';
+        document.getElementById('street').value = savedAddress.street || '';
+        document.getElementById('zipCode').value = savedAddress.zipCode || '';
+        document.getElementById('country').value = savedAddress.country || 'Egypt';
+        document.getElementById('additionalNotes').value = savedAddress.additionalNotes || '';
+    }
+}
+
+// Handle address form submission
+function handleAddressFormSubmit(event) {
+    event.preventDefault();
+    
+    const formData = new FormData(event.target);
+    const addressData = {
+        fullName: formData.get('fullName').trim(),
+        phone: formData.get('phone').trim(),
+        city: formData.get('city').trim(),
+        state: formData.get('state').trim(),
+        street: formData.get('street').trim(),
+        zipCode: formData.get('zipCode').trim(),
+        country: formData.get('country').trim(),
+        additionalNotes: formData.get('additionalNotes').trim()
+    };
+    
+    // Validate required fields
+    if (!addressData.fullName || !addressData.phone || !addressData.city || !addressData.street || !addressData.country) {
+        showNotification("Please fill in all required fields", "warning");
+        return;
+    }
+    
+    // Determine if this is a single item or bulk purchase
+    if (currentBulkPurchaseItems && currentBulkPurchaseItems.length > 0) {
+        // Complete bulk purchase
+        completeBulkPurchase(addressData);
+    } else if (currentPurchaseItem) {
+        // Complete single item purchase
+        completePurchase(addressData);
+    } else {
+        showNotification("No items selected for purchase", "error");
+        closeAddressPopup();
+    }
+}
+
+// Initialize address form when DOM is loaded
+document.addEventListener("DOMContentLoaded", () => {
+    // Add event listener to address form after a delay to ensure it's loaded
+    setTimeout(() => {
+        const addressForm = document.getElementById('address-form');
+        if (addressForm) {
+            addressForm.addEventListener('submit', handleAddressFormSubmit);
+        }
+    }, 100);
+});
+
 // Export functions for global use
 window.addToCart = addToCart;
 window.removeFromCart = removeFromCart;
@@ -447,3 +751,5 @@ window.renderCart = renderCart;
 window.updateCartCount = updateCartCount;
 window.confirmRemoveItem = confirmRemoveItem;
 window.buyItem = buyItem;
+window.showAddressPopup = showAddressPopup;
+window.closeAddressPopup = closeAddressPopup;
